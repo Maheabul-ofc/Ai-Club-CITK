@@ -46,7 +46,8 @@ const LandingPage = () => {
   useEffect(() => {
     const fetchEvents = async () => {
       try {
-        const response = await axios.get('/api/v1/events/public?limit=3');
+        const eventsUrl = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api/v1/events/public?limit=3` : '/api/v1/events/public?limit=3';
+        const response = await axios.get(eventsUrl);
         setEvents(response.data?.data || []);
       } catch (error) {
         console.error('Failed to fetch events:', error);

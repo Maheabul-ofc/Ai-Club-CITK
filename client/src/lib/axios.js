@@ -11,7 +11,7 @@ export const getAccessToken = () => {
 };
 
 const axiosInstance = axios.create({
-  baseURL: '/api/v1',
+  baseURL: import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api/v1` : '/api/v1',
   withCredentials: true,
 });
 
@@ -55,7 +55,8 @@ axiosInstance.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const { data } = await axios.post('/api/v1/auth/refresh', {}, { withCredentials: true });
+        const refreshUrl = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api/v1/auth/refresh` : '/api/v1/auth/refresh';
+        const { data } = await axios.post(refreshUrl, {}, { withCredentials: true });
         setAccessToken(data.accessToken);
         isRefreshing = false;
         onRefreshed(data.accessToken);
