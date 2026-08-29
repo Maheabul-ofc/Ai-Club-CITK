@@ -1,3 +1,11 @@
+import os
+# Limit CPU threads to drastically reduce memory usage for Render's 512MB Free Tier
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import base64
 import numpy as np
 import cv2
@@ -23,9 +31,9 @@ app.add_middleware(
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_or_create_collection(name="faces")
 
-# Initialize InsightFace
-face_app = FaceAnalysis(name='buffalo_l')
-face_app.prepare(ctx_id=0, det_size=(640, 640))
+# Initialize InsightFace with a smaller model to fit in 512MB RAM
+face_app = FaceAnalysis(name='buffalo_s')
+face_app.prepare(ctx_id=-1, det_size=(640, 640))
 
 class EnrollRequest(BaseModel):
     userId: str
