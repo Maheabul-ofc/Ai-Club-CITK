@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pydantic
-chromadb
+
 insightface
 onnxruntime
 opencv-python-headless

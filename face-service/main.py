@@ -1,4 +1,6 @@
+import json
 import os
+
 # Limit CPU threads to drastically reduce memory usage for Render's 512MB Free Tier
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -13,7 +15,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import chromadb
 from insightface.app import FaceAnalysis
 
 app = FastAPI(title="Face Recognition Service")
@@ -27,9 +28,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize ChromaDB
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
-collection = chroma_client.get_or_create_collection(name="faces")
+# Simple JSON-based storage to replace memory-heavy ChromaDB
+DB_FILE = "faces_db.json"
+face_db = {}
+
+def load_db():
+    global face_db
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r") as f:
+                face_db = json.load(f)
+        except Exception:
+            face_db = {}
+    else:
+        face_db = {}
+
+def save_db():
+    with open(DB_FILE, "w") as f:
+        json.dump(face_db, f)
+
+load_db()
 
 # Initialize InsightFace with a smaller model to fit in 512MB RAM
 face_app = FaceAnalysis(name='buffalo_s')
@@ -79,15 +97,9 @@ async def enroll(request: EnrollRequest):
         
     avg_embedding = np.mean(embeddings, axis=0)
     avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
-    embedding_list = avg_embedding.tolist()
     
-    try:
-        collection.upsert(
-            ids=[request.userId],
-            embeddings=[embedding_list]
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    face_db[request.userId] = avg_embedding.tolist()
+    save_db()
         
     return {"status": "success", "userId": request.userId, "message": "User enrolled successfully"}
 
@@ -105,28 +117,30 @@ async def recognize(request: RecognizeRequest):
     target_face = faces[0]
     embedding = target_face.embedding
     embedding = embedding / np.linalg.norm(embedding)
-    embedding_list = embedding.tolist()
     
-    try:
-        results = collection.query(
-            query_embeddings=[embedding_list],
-            n_results=1
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    if not face_db:
+        return {"userId": None, "message": "No users enrolled"}
         
-    if not results['ids'] or not results['ids'][0]:
-        return {"userId": None, "message": "No matches found"}
-        
-    distance = results['distances'][0][0]
-    matched_id = results['ids'][0][0]
+    best_match = None
+    best_distance = float('inf')
+    
+    for uid, stored_emb in face_db.items():
+        stored_emb = np.array(stored_emb)
+        # Cosine distance since vectors are normalized (1 - dot product)
+        # However, we used L2 distance previously in chromadb default. 
+        # L2 distance squared = 2 - 2 * dot(a, b) for normalized vectors.
+        # Let's just use L2 distance.
+        dist = np.linalg.norm(embedding - stored_emb)
+        if dist < best_distance:
+            best_distance = dist
+            best_match = uid
     
     THRESHOLD = 1.0
     
-    if distance < THRESHOLD:
-        return {"userId": matched_id, "distance": distance}
+    if best_distance < THRESHOLD:
+        return {"userId": best_match, "distance": float(best_distance)}
     else:
-        return {"userId": None, "message": "Unrecognized", "distance": distance}
+        return {"userId": None, "message": "Unrecognized", "distance": float(best_distance)}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
