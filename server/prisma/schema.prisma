@@ -1,0 +1,178 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+// extensions = [vector]
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  ASST_CHIEF_CONVENOR
+  DEPT_CONVENOR
+  DEPT_ASST_CONVENOR
+  COORDINATOR
+  MEMBER
+}
+
+enum ApprovalStatus {
+  ACTIVE
+  PENDING_DEPT_REVIEW
+  PENDING_ASST_CHIEF_REVIEW
+  REJECTED
+}
+
+enum EventStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id              String         @id @default(uuid())
+  name            String
+  email           String         @unique
+  password        String
+  rollNumber      String?        @unique
+  branch          String?        // Academic branch/major (e.g., CSE, ECE)
+  semester        Int?
+  module          String?        // Academic module
+  contactNumber   String?
+  role            Role           @default(MEMBER)
+  approvalStatus  ApprovalStatus @default(ACTIVE)
+  departmentId    String?
+  department      Department?    @relation("DepartmentMembers", fields: [departmentId], references: [id])
+  addedBy         String?
+  addedByUser     User?          @relation("AddedByUser", fields: [addedBy], references: [id])
+  addedUsers      User[]         @relation("AddedByUser")
+  refreshToken    String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  // Relations
+  // faceEmbeddings   FaceEmbedding[]
+  approvalRequests ApprovalRequest[] @relation("ApplicantRequests")
+  deptReviews      ApprovalRequest[] @relation("DeptReviewer")
+  chiefReviews     ApprovalRequest[] @relation("ChiefReviewer")
+  createdEvents    Event[]           @relation("EventCreator")
+  attendances      Attendance[]
+  auditLogsActor   AuditLog[]        @relation("AuditActor")
+
+  @@map("users")
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members          User[]            @relation("DepartmentMembers")
+  approvalRequests ApprovalRequest[]
+
+  @@map("departments")
+}
+
+model ApprovalRequest {
+  id           String @id @default(uuid())
+  userId       String
+  user         User   @relation("ApplicantRequests", fields: [userId], references: [id])
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  // Stage 1: Department Convenor review
+  deptReviewStatus   ReviewStatus @default(PENDING)
+  deptReviewedBy     String?
+  deptReviewer       User?        @relation("DeptReviewer", fields: [deptReviewedBy], references: [id])
+  deptReviewedAt     DateTime?
+  deptRemarks        String?
+
+  // Stage 2: Assistant Chief Convenor review
+  asstChiefReviewStatus ReviewStatus @default(PENDING)
+  asstChiefReviewedBy   String?
+  asstChiefReviewer     User?        @relation("ChiefReviewer", fields: [asstChiefReviewedBy], references: [id])
+  asstChiefReviewedAt   DateTime?
+  asstChiefRemarks      String?
+
+  finalStatus ApprovalStatus @default(PENDING_DEPT_REVIEW)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@map("approval_requests")
+}
+
+// model FaceEmbedding {
+//   id        String   @id @default(uuid())
+//   userId    String
+//   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+//   embedding Unsupported("vector(512)")
+//   createdAt DateTime @default(now())
+// 
+//   @@map("face_embeddings")
+// }
+
+model Event {
+  id        String      @id @default(uuid())
+  title     String
+  date      DateTime
+  time      String
+  status    EventStatus @default(SCHEDULED)
+  createdBy String
+  creator   User        @relation("EventCreator", fields: [createdBy], references: [id])
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  attendances Attendance[]
+
+  @@map("events")
+}
+
+model Attendance {
+  id              String   @id @default(uuid())
+  eventId         String
+  event           Event    @relation(fields: [eventId], references: [id])
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  timestamp       DateTime @default(now())
+  confidenceScore Float?
+  markedManually  Boolean  @default(false)
+
+  @@unique([eventId, userId])
+  @@map("attendances")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  actor      User     @relation("AuditActor", fields: [actorId], references: [id])
+  action     String   // e.g., 'CREATE_ADMIN', 'DELETE_ADMIN', 'ADD_TEAM_MEMBER', 'APPROVE_COORDINATOR'
+  targetType String   // e.g., 'User', 'Department', 'Event'
+  targetId   String
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model LeadershipProfile {
+  id           String   @id @default(uuid())
+  name         String
+  role         String
+  photoUrl     String?
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("leadership_profiles")
+}
