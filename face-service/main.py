@@ -1,13 +1,5 @@
 import json
 import os
-
-# Limit CPU threads to drastically reduce memory usage for Render's 512MB Free Tier
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
 import base64
 import numpy as np
 import cv2
@@ -15,7 +7,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from insightface.app import FaceAnalysis
 
 app = FastAPI(title="Face Recognition Service")
 
@@ -28,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simple JSON-based storage to replace memory-heavy ChromaDB
+# Simple JSON-based storage
 DB_FILE = "faces_db.json"
 face_db = {}
 
@@ -49,9 +40,13 @@ def save_db():
 
 load_db()
 
-# Initialize InsightFace with a smaller model to fit in 512MB RAM
-face_app = FaceAnalysis(name='buffalo_s')
-face_app.prepare(ctx_id=-1, det_size=(640, 640))
+# Initialize OpenCV lightweight YuNet and SFace models
+# These take <50MB RAM compared to InsightFace's 600MB
+try:
+    detector = cv2.FaceDetectorYN.create("face_detection_yunet.onnx", "", (320, 320))
+    recognizer = cv2.FaceRecognizerSF.create("face_recognition_sface.onnx", "")
+except Exception as e:
+    print(f"Error loading OpenCV models: {e}")
 
 class EnrollRequest(BaseModel):
     userId: str
@@ -73,6 +68,21 @@ def decode_base64_image(b64_str: str) -> np.ndarray:
     except Exception as e:
         raise ValueError(f"Invalid image format: {e}")
 
+def get_face_feature(img):
+    height, width, _ = img.shape
+    detector.setInputSize((width, height))
+    _, faces = detector.detect(img)
+    if faces is None or len(faces) == 0:
+        return None
+    
+    # Get the largest face in the image
+    face = max(faces, key=lambda f: f[2] * f[3])
+    
+    # Align and extract feature
+    aligned_face = recognizer.alignCrop(img, face)
+    feature = recognizer.feature(aligned_face)
+    return feature[0] # 128D array
+
 @app.post("/enroll")
 async def enroll(request: EnrollRequest):
     if not request.images:
@@ -85,15 +95,12 @@ async def enroll(request: EnrollRequest):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         
-        faces = face_app.get(img)
-        if not faces:
-            continue
-        
-        target_face = faces[0]
-        embeddings.append(target_face.embedding)
+        feature = get_face_feature(img)
+        if feature is not None:
+            embeddings.append(feature)
         
     if not embeddings:
-        raise HTTPException(status_code=400, detail="No faces detected in any of the provided images")
+        raise HTTPException(status_code=400, detail="No faces detected in images")
         
     avg_embedding = np.mean(embeddings, axis=0)
     avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
@@ -110,14 +117,10 @@ async def recognize(request: RecognizeRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
         
-    faces = face_app.get(img)
-    if not faces:
+    embedding = get_face_feature(img)
+    if embedding is None:
         return {"userId": None, "message": "No face detected"}
         
-    target_face = faces[0]
-    embedding = target_face.embedding
-    embedding = embedding / np.linalg.norm(embedding)
-    
     if not face_db:
         return {"userId": None, "message": "No users enrolled"}
         
@@ -126,16 +129,17 @@ async def recognize(request: RecognizeRequest):
     
     for uid, stored_emb in face_db.items():
         stored_emb = np.array(stored_emb)
-        # Cosine distance since vectors are normalized (1 - dot product)
-        # However, we used L2 distance previously in chromadb default. 
-        # L2 distance squared = 2 - 2 * dot(a, b) for normalized vectors.
-        # Let's just use L2 distance.
-        dist = np.linalg.norm(embedding - stored_emb)
+        # Cosine distance (1 - cosine similarity)
+        cosine_sim = np.dot(embedding, stored_emb) / (np.linalg.norm(embedding) * np.linalg.norm(stored_emb))
+        dist = 1.0 - cosine_sim
+        
         if dist < best_distance:
             best_distance = dist
             best_match = uid
     
-    THRESHOLD = 1.0
+    # SFace cosine similarity threshold is roughly 0.363 (higher is better). 
+    # Therefore cosine distance threshold is 1 - 0.363 = 0.637. Let's use 0.6 as safe threshold.
+    THRESHOLD = 0.6
     
     if best_distance < THRESHOLD:
         return {"userId": best_match, "distance": float(best_distance)}
