@@ -73,11 +73,11 @@ const LiveScannerPage = () => {
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) return;
 
-    const base64String = imageSrc.split(',')[1];
-
     try {
-      const pythonResponse = await axios.post('http://localhost:8000/recognize', {
-        image: base64String
+      // Call Face Service
+      const faceApiUrl = import.meta.env.VITE_FACE_SERVICE_URL || 'http://localhost:8000';
+      const pythonResponse = await axios.post(`${faceApiUrl}/recognize`, {
+        image: imageSrc
       });
 
       if (pythonResponse.data && pythonResponse.data.userId) {
